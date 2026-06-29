@@ -52,6 +52,8 @@ example (n : ℤ) (a b : G) : a^n*b^n*a^n*a^n*a^(-n)*a^(-n)*b^(-n)*a^(-n) = 1 :=
 
 example (x y : G) : (x⁻¹ * (x * y) * y⁻¹)⁻¹ = 1 := by group
 
+example (a b c d : G) : b ^ 17 * c⁻¹ * d * b ^ 3 = 1 := by sorry
+
 /--
 error: `group` made no progress
 G : Type
