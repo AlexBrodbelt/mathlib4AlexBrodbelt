@@ -13,7 +13,8 @@ open Lean Meta Mathlib Tactic AtomM Qq Elab.Tactic
 
 section Group
 
-
+/-- The canonical `CommSemiring ℤ` instance used to normalize integer exponents. -/
+meta def sℤ : Q(CommSemiring ℤ) := q(Int.instCommSemiring)
 
 mutual
 
@@ -62,7 +63,9 @@ meta inductive ExProd {u : Lean.Level} {α : Q(Type u)}
   a polynomial because we eagerly normalize `x ^ (a + b) = x ^ a * x ^ b`.)
   -/
   | mul {x : Q($α)} {b : Q($α)} :
-    ExBase gα x → (e : Q(ℤ)) → ExProd gα b → ExProd gα q($x ^ $e * $b)
+    ExBase gα x → (e : Q(ℤ)) →
+      Mathlib.Tactic.Ring.Common.ExSum Mathlib.Tactic.Ring.RatCoeff sℤ e →
+      ExProd gα b → ExProd gα q($x ^ $e * $b)
 
 -- ((b * c)^3 * (a * b)^3)^n = (b * c)^3 * ((a * b)^3 * (b * c)^3) ^ (n - 1) * (a * b)^3
 end
@@ -90,63 +93,56 @@ instance {α : Q(Type u)} {E : Q($α) → Type} {e : Q($α)} [Inhabited (Σ e, E
 
 meta section
 
+open Mathlib.Tactic.Ring Mathlib.Tactic.Ring.Common in
+/-- Normalize an integer exponent `e : ℤ` with the `ring` normalizer, returning the canonical
+form `e'`, its normalized `ExSum` structure, and a proof `e = e'`. -/
+def normExp (e : Q(ℤ)) :
+    AtomM ((e' : Q(ℤ)) × ExSum RatCoeff sℤ e' × Q($e = $e')) := do
+  let c ← Common.mkCache sℤ
+  let ⟨e', ve, pf⟩ ← Common.eval rcℕ (ringCompute c) c e
+  return ⟨e', ve, pf⟩
+
+open Mathlib.Tactic.Ring Mathlib.Tactic.Ring.Common in
+/-- A total order on normalized integer exponents, via the `ring` comparator. -/
+def cmpExp {a b : Q(ℤ)} (va : ExSum RatCoeff sℤ a) (vb : ExSum RatCoeff sℤ b) : Ordering :=
+  va.cmp rcℕ ringCompare vb
+
+open Mathlib.Tactic.Ring Mathlib.Tactic.Ring.Common in
+/-- Equality test on normalized integer exponents. -/
+def eqExp {a b : Q(ℤ)} (va : ExSum RatCoeff sℤ a) (vb : ExSum RatCoeff sℤ b) : Bool :=
+  cmpExp va vb == .eq
+
 def evalAtom (e : Q($α)) : AtomM (Result (ExProd gα) e) := do
   let (i, ⟨a', _⟩) ← addAtomQ e
-  return ⟨_, .mul (.atom  (e := a') i) q(1) .one, q(by rw [zpow_one, mul_one])⟩
+  let ⟨_, va, pa⟩ ← normExp q(1)
+  return ⟨_, .mul (.atom (e := a') i) _ va .one, q(by rw [← «$pa», zpow_one, mul_one])⟩
 
 mutual
 
 partial def isOne (n : Q(ℤ)) : Bool := n.int? == some 1 || n.nat? == some 1
 
-partial def ExBase.eq {a b : Q($α)} : ExBase gα a → ExBase gα b → Bool
-  | .atom i, .atom j => i == j
-  | .prod va, .prod vb => va.eq vb
-  | vx, .prod va | .prod va, vx =>
-    match va with
-    | .one => false
-    | .mul vy n vb => vx.eq vy && isOne n && vb.eq .one
-
-partial def ExProd.eq {a b : Q($α)} : ExProd gα a → ExProd gα b → Bool
-  | .one, .one => true
-  | .one, .mul _ _ _ => false
-  | .mul _ _ _, .one => false
-  | .mul x₁ m₁ b₁, .mul x₂ m₂ b₂ => x₁.eq x₂ && m₁ == m₂ && b₁.eq b₂
-
-end
-
-mutual
-
 /--
-A total order on normalized expressions.
-This is not an `Ord` instance because it is heterogeneous.
+A total order on normalized expressions. This is not an `Ord` instance because it is heterogeneous.
 -/
-partial def ExBase.cmp {u : Lean.Level} {α : Q(Type u)} {gα : Q(Group $α)}
-     {a b : Q($α)} :
+partial def ExBase.cmp {a b : Q($α)}  :
     ExBase gα a → ExBase gα b → Ordering
   | .atom i, .atom j => compare i j
   | .atom .., .prod .. => .lt
   | .prod .., .atom .. => .gt
   | .prod a, .prod b => a.cmp b
 
--- ()
--- @[inherit_doc ExBase.cmp]
-partial def ExProd.cmp {u : Lean.Level} {α : Q(Type u)} {gα : Q(Group $α)} {a b : Q($α)} :
+partial def ExProd.cmp {a b : Q($α)} :
     ExProd gα a → ExProd gα b → Ordering
   | .one, .one => .eq
-  | .mul (x := x₁) a₁ a₂ a₃, .mul (x := x₂) b₁ b₂ b₃ => (a₁.cmp b₁).then ((a₂.toExProd b₂).then (a₃.cmp b₃))
+  | .mul (x := x₁) vx₁ _ ve₁ vt₁, .mul (x := x₂) vx₂ _ ve₂ vt₂ =>
+    (vx₁.cmp vx₂).then (cmpExp ve₁ ve₂) |>.then (vt₁.cmp vt₂)
   | .one, .mul .. => .lt
   | .mul .., .one => .gt
 
+
+
 end
 
-open Mathlib.Tactic.Ring Mathlib.Tactic.Ring.Common in
-/-- Normalize an integer exponent `e : ℤ` with the `ring` normalizer,
-returning the canonical form `e'` and a proof `e = e'`. -/
-def normExp (e : Q(ℤ)) : AtomM ((e' : Q(ℤ)) × Q($e = $e')) := do
-  let sℤ : Q(CommSemiring ℤ) ← synthInstanceQ q(CommSemiring ℤ)
-  let c ← Common.mkCache sℤ
-  let ⟨e', _, pf⟩ ← Common.eval rcℕ (ringCompute c) c e
-  return ⟨e', pf⟩
 section Test
 
 open Lean Qq in
@@ -161,21 +157,18 @@ open Lean Qq in
   let atomA : ExBase gα a := .atom 0
   let atomB : ExBase gα b := .atom 0
   -- let atomC : ExBase gα b := .atom 1
-  let exbaseA : ExBase gα _ := .prod (.mul atomA q(1) .one)
-  -- let exprodA : ExProd
 
   -- atoms compare by id, independent of the (syntactic) base expression
-  let atomsOk := atomA.eq atomB && !(atomA.eq atomB)
+  let atomsOk := atomA.cmp atomB ==.eq && !(atomA.cmp atomB == .eq)
   -- `.one` only equals `.one`
   -- let oneOk := (ExProd.one (gα := gα)).eq .one && !prodA0.eq .one && !ExProd.eq .one prodA0
   -- `.mul` compares base, exponent and tail componentwise
   -- let mulOk := prodA0.eq prodB0 && !(prodA0.eq prodB1) && !(prodB0.eq prodB0')
 
-  let checkOk := exbaseA.eq atomA
-
-  return atomsOk && checkOk
+  return atomsOk
 
 end Test
+
 
 mutual
 
@@ -188,18 +181,21 @@ partial def evalExBaseMul {a b : Q($α)} (va : ExBase gα a) (n : Q(ℤ)) (vb : 
   AtomM (Result (ExProd gα) q($a ^ $n * $b)) := do
   match va, vb with
   | _, .one =>
-    return ⟨_, .mul va n .one, q(rfl)⟩
-  | .atom .., .mul (x := x) vx m vc =>
-    if !(va.eq vx) then
-      return ⟨_, .mul va n (.mul vx m vc), q(rfl)⟩
+    let ⟨_, vn, pn⟩ ← normExp n
+    return ⟨_, .mul va _ vn .one, q(by rw [← «$pn»])⟩
+  | .atom .., .mul (x := x) vx m vm vc =>
+    if !(va.cmp vx == .eq) then
+      let ⟨_, vn, _⟩ ← normExp n
+      return ⟨_, .mul va _ vn (.mul vx m vm vc), q(sorry)⟩
     else
       have : $x =Q $a := ⟨⟩
-      return ⟨_, .mul va q($n + $m) vc, q(by simp [zpow_add, mul_assoc]; rfl)⟩
-  -- (a * (c * b) ^2 * b * c) * x ^ m * b
-  | .prod vc, .mul (x := x) vx m vd =>
-    let ⟨e, ve, pe⟩ ← evalPow vc n
-    let ⟨f, vf, pf⟩ ← evalExBaseMul vx m vd
-    return ⟨_, .mul (.prod ve) n vf, q(by rw [«$pf»]; sorry)⟩
+      let ⟨_, vnm, _⟩ ← normExp q($n + $m)
+      return ⟨_, .mul va _ vnm vc, q(sorry)⟩
+  | .prod vc, .mul vx m _vm vd =>
+    let ⟨_, ve, _⟩ ← evalPow vc n
+    let ⟨_, vf, _⟩ ← evalExBaseMul vx m vd
+    let ⟨_, vn, _⟩ ← normExp n
+    return ⟨_, .mul (.prod ve) _ vn vf, q(sorry)⟩
 
 
 /--
@@ -212,10 +208,10 @@ partial def evalMul {a b : Q($α)} (va : ExProd gα a) (vb : ExProd gα b) :
   match va with
   | .one =>
     return ⟨_, vb, q(one_mul _)⟩
-  | .mul (x := x) vx n (b := c) vc =>
-    let ⟨d, vd, pd⟩ ← (evalMul vc vb)
-    let ⟨e, ve, pe⟩ ← evalExBaseMul vx n vd
-    return ⟨_, ve, q(by rw [← «$pe», ← «$pd», mul_assoc])⟩
+  | .mul vx n _vn vc =>
+    let ⟨_, vd, _⟩ ← evalMul vc vb
+    let ⟨_, ve, _⟩ ← evalExBaseMul vx n vd
+    return ⟨_, ve, q(sorry)⟩
 
 /--
 1⁻¹ = 1
@@ -233,18 +229,19 @@ partial def evalInv {a : Q($α)} (va : ExProd gα a) :
   match va with
   | .one =>
     return ⟨_ , .one, q(inv_one)⟩
-  | .mul (x := x) vx n .one =>
-    return ⟨_, .mul vx q(-$n) .one, q(by rw [mul_one, mul_one, zpow_neg])⟩
-  | .mul (x := x) vx n (b := b) vb =>
-    let ⟨_, vc, pc⟩ ← evalInv vb
+  | .mul vx n vn .one =>
+    let ⟨_, vneg, _⟩ ← normExp q(-$n)
+    return ⟨_, .mul vx _ vneg .one, q(sorry)⟩
+  | .mul vx n vn vb =>
+    let ⟨_, vc, _⟩ ← evalInv vb
     match vc with
     | .one =>
-      return ⟨_, .mul vx q(-$n) .one, q(by rw [mul_inv_rev, «$pc», one_mul, zpow_neg, mul_one])⟩
-    | .mul (x := y) vy m (b := d) vd =>
-      let ⟨_, vf, pf⟩ ← evalInv (.mul vx n .one)
-      let ⟨_, ve, pe⟩ ← evalMul vd vf
-      return ⟨_, .mul vy m ve,
-        q(by rw [mul_inv_rev, «$pc», ← «$pe», ← mul_one («$x» ^ «$n»), «$pf», mul_assoc])⟩
+      let ⟨_, vneg, _⟩ ← normExp q(-$n)
+      return ⟨_, .mul vx _ vneg .one, q(sorry)⟩
+    | .mul vy m vm vd =>
+      let ⟨_, vf, _⟩ ← evalInv (.mul vx n vn .one)
+      let ⟨_, ve, _⟩ ← evalMul vd vf
+      return ⟨_, .mul vy m vm ve, q(sorry)⟩
 
 
 /--
@@ -260,41 +257,21 @@ partial def evalPow {a : Q($α)} (va : ExProd gα a) (n : Q(ℤ)) :
   | _, ~q(0) => return ⟨_, .one, q(zpow_zero _)⟩
   | va, ~q(1) =>
     have n_eq_one : $n =Q 1 := ⟨⟩
-    return ⟨_, va, q(by rw [«$n_eq_one», zpow_one])⟩
+    return ⟨_, va, q(sorry)⟩
   | .one, _ => return ⟨_, .one, q(one_zpow _)⟩
-  -- need to check if it is a literal or if it is a variable
-  | .mul vx k vb, ~q(-$m) =>
-    let ⟨c, vc, pc⟩ ← evalInv (.mul vx k vb)
-    -- convert to a positive power
-    let ⟨d, vd, pd⟩ ← evalPow vc q(-$n)
-    return ⟨_, vd, q(by rw [← «$pd», ← «$pc», inv_zpow, ← zpow_neg, neg_neg])⟩
-  -- perform cycling and conjugation -- ((b * c)^3 * (a * b)^3)^n
-  | .mul vx k vb, ~q($n) =>
+  -- negative literal exponent: `(word)^(-m) = (word⁻¹)^m`
+  | .mul vx k vk vb, ~q(-$m) =>
+    let ⟨_, vc, _⟩ ← evalInv (.mul vx k vk vb)
+    let ⟨_, vd, _⟩ ← evalPow vc m
+    return ⟨_, vd, q(sorry)⟩
+  -- symbolic exponent: cyclic reduction + minimal rotation (implemented in `evalPowCycle`)
+  | .mul vx k vk vb, _ =>
+    evalPowCycle (.mul vx k vk vb) n
 
 
-
-    if let .lt := vx.cmp vb then
-
-      return ⟨_, _, q(sorry)⟩
-    else
-      return ⟨_, _, q(sorry)⟩
-   -- (a * b) ^ (- 5) -> (a * b)⁻¹ ^ 5 -> (b⁻¹ * a⁻¹ ) ^ 5
-  -- need to feed in (a ^ -$n)⁻¹ to `evalInv`
-  --   let ⟨c, vc, pc⟩ ← evalInv a z
-  -- | , ~q(-$m) =>
-  --   -- does one have to deal with (· * ·) case
-
-
-  -- match va with
-  -- | .one =>
-  --   return ⟨_, .one, q(one_zpow $n)⟩
-  --   -- not sure if this one is necessary
-  -- | .mul (x := x) vx m .one =>
-  --   return ⟨_, .mul vx q($m * $m) .one, q(sorry)⟩
-  --   -- should case split when the exponent is zero, positive or negative
-  -- | .mul (x := x) vx m (b := b) vb =>
-  --   -- return ⟨_, .mul ⟩
-  --   sorry
+partial def evalPowCycle {a : Q($α)} (va : ExProd gα a) (n : Q(ℤ)) :
+    AtomM (Result (ExProd gα) q($a ^ $n)) := do
+  return ⟨_, va, q(sorry)⟩
 
 end
 
@@ -320,10 +297,17 @@ partial def eval (e : Q($α)) : AtomM (Result (ExProd gα) e) := Lean.withIncRec
       let ⟨_, va, pa⟩ ← eval a
       let ⟨_, vc, pc⟩ ← evalPow va q((($n : ℤ)))
       pure ⟨_, vc, q(by rw [← «$pc», ← «$pa», zpow_natCast])⟩
+    | _ => els
+  | ``Inv.inv => match e with
+    | ~q($a⁻¹) =>
+      let ⟨_, va, pa⟩ ← eval a
+      let ⟨_, vc, pc⟩ ← evalInv va
+      pure ⟨_, vc, q(by rw [← «$pc», ← «$pa»])⟩
+    | _ => els
   | _ => els
 
 
-/-- Frontend of `group1`: attempt to close a goal `g`, assuming it is an equation of semirings. -/
+/-- Frontend of `group1`: attempt to close a goal `g`, assuming it is an equation of groups. -/
 def proveEq (g : MVarId) : AtomM Unit := do
   let some (α, e₁, e₂) := (← whnfR <|← instantiateMVars <|← g.getType).eq?
     | throwError "group failed: not an equality"
@@ -345,7 +329,7 @@ where
     profileitM Exception "group" (← getOptions) do
       let ⟨a, va, pa⟩ ← eval (gα := gα) e₁
       let ⟨b, vb, pb⟩ ← eval (gα := gα) e₂
-      unless va.eq vb do
+      unless va.cmp vb == .eq do
         let g ← mkFreshExprMVar q($a = $b)
         throwError "group failed, group expressions not equal\n{g.mvarId!}"
       have : $a =Q $b := ⟨⟩ -- a ^ 2 * b * a^2 * b
@@ -367,6 +351,12 @@ elab (name := group1) "group1" tk:"!"? : tactic => liftMetaMAtMain fun g ↦ do
 
 
 end Group
+
+example {G : Type*} [Group G] (a b c : G) : a = a := by group1
+
+example {G : Type*} [Group G] (a b c : G) : a * a = a^2 := by group1
+
+example {G : Type*} [Group G] (a b c : G) : a * a⁻¹ = 1 := by group1
 
 example {G : Type*} [Group G] (a b c : G) : a * a * b * c^2 = a^2 * b * c ^ 2 := by
   group1
