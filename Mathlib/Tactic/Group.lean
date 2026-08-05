@@ -22,7 +22,8 @@ open Mathlib.Tactic.Ring.Common (ExSum Cache evalAdd evalNeg)
 
 section Group
 
-/-- `CommSemiring ℤ` / cache / coefficient normalizer for exponents (cf. `sℕ`, `Cache.nat`, `rcℕ`). -/
+/-- `CommSemiring ℤ` / cache / coefficient normalizer for exponents (cf. `sℕ`, `Cache.nat`, `rcℕ`).
+-/
 meta def sℤ : Q(CommSemiring ℤ) := q(Int.instCommSemiring)
 meta def cℤ : Cache sℤ :=
   { rα := some q(Int.instCommRing), dsα := none, czα := some q(Int.instCharZero) }
@@ -73,19 +74,10 @@ instance {α : Q(Type u)} {E : Q($α) → Type} {e : Q($α)} [Inhabited (Σ e, E
   let ⟨e', v⟩ : Σ e, E e := default; ⟨e', v, default⟩
 
 
+
 meta section
 
 initialize registerTraceClass `Tactic.group
-
-/-- Interpret a `ℕ` exponent as a `ℤ` expression, so truncated subtraction becomes integer
-subtraction and can be cancelled by `ring`. -/
-partial def natExpToInt (e : Q(ℕ)) : MetaM Q(ℤ) := do
-  match e with
-  | ~q($a + $b) => return q($(← natExpToInt a) + $(← natExpToInt b))
-  | ~q($a * $b) => return q($(← natExpToInt a) * $(← natExpToInt b))
-  | ~q($a - $b) => return q($(← natExpToInt a) - $(← natExpToInt b))
-  | ~q($a ^ $b) => return q($(← natExpToInt a) ^ $b)
-  | _ => return q(($e : ℤ))
 
 def evalAtom (e : Q($α)) : AtomM (Result (ExProd gα) e) :=
   withTraceNode `Tactic.group (fun _ => return m!"atom: {e}") do
@@ -115,7 +107,18 @@ partial def ExProd.cmp {a b : Q($α)} :
 
 end
 
-mutual
+/-! ### Multiplication of an `ExBase` power into an `ExProd` -/
+variable {G : Type*} [Group G]
+
+theorem zpow_zero_mul_one (a : G) : a ^ (0 : ℤ) * (1 : G) = 1 := by simp
+
+theorem mul_zpow_add_overlap (a : G) (n m nm : ℤ) (c : G) (h : n + m = nm) :
+    a ^ n * (a ^ m * c) = a ^ nm * c := by
+  rw [← mul_assoc, ← zpow_add, h]
+
+theorem mul_zpow_cancel (a : G) (n m : ℤ) (c : G) (h : n + m = 0) :
+    a ^ n * (a ^ m * c) = c := by
+  rw [← mul_assoc, ← zpow_add, h, zpow_zero, one_mul]
 
 /--
 `a ^ n * 1 = a ^ n`
@@ -130,26 +133,34 @@ partial def evalExBaseMul {a b : Q($α)} (va : ExBase gα a) {n : Q(ℤ)}
     | _, .one =>
       withTraceNode `Tactic.group (fun _ => return m!"mul_one") do
         match vn with
-        | .zero => return ⟨_, .one, q(sorry)⟩ -- `a ^ 0 * 1 = 1`
+        | .zero => return ⟨_, .one, q(zpow_zero_mul_one $a)⟩ -- `a ^ 0 * 1 = 1`
         | vn => return ⟨_, .mul va vn .one, q(rfl)⟩
-    | .atom .., .mul (x := x) vx vm vc =>
+    | va, .mul (x := x) (e := m) vx vm (b := c) vc =>
       if !(va.cmp vx == .eq) then
         withTraceNode `Tactic.group (fun _ => return m!"cons") do
-          return ⟨_, .mul va vn (.mul vx vm vc), q(sorry)⟩
+          return ⟨_, .mul va vn (.mul vx vm vc), q(rfl)⟩
       else
         withTraceNode `Tactic.group (fun _ => return m!"combine exponents") do
           have : $x =Q $a := ⟨⟩
-          let ⟨_, vnm, _⟩ ← evalAdd rcℤ rcℕ vn vm
+          let ⟨nm, vnm, pnm⟩ ← evalAdd rcℤ rcℕ vn vm
           match vnm with
-          | .zero => return ⟨_, vc, q(sorry)⟩ -- `a ^ n * a ^ (-n) * c = c`
-          | vnm => return ⟨_, .mul va vnm vc, q(sorry)⟩
-    | .prod vc, .mul vx vm vd =>
+          | .zero => return ⟨_, vc, q(mul_zpow_cancel $a $n $m $c $pnm)⟩ -- `a ^ n * a ^ m * c = c`
+          | vnm => return ⟨_, .mul va vnm vc, q(mul_zpow_add_overlap $a $n $m $nm $c $pnm)⟩
+
+/-
+| .prod vc, .mul vx vm vd =>
       withTraceNode `Tactic.group (fun _ => return m!"prod") do
         let ⟨_, vn', _⟩ ← Mathlib.Tactic.Ring.Common.eval rcℕ rcℤ cℤ n
         let ⟨_, ve, _⟩ ← evalPow vc vn'
         let ⟨_, vf, _⟩ ← evalExBaseMul vx vm vd
         return ⟨_, .mul (.prod ve) vn vf, q(sorry)⟩
+        -/
 
+/-! ### Multiplication of `ExProd`s -/
+
+theorem mul_cons_congr (x : G) (n : ℤ) {c b d e : G} (h₁ : c * b = d) (h₂ : x ^ n * d = e) :
+    (x ^ n * c) * b = e := by
+  rw [mul_assoc, h₁, h₂]
 
 /--
 `1 * b = b`
@@ -162,10 +173,23 @@ partial def evalMul {a b : Q($α)} (va : ExProd gα a) (vb : ExProd gα b) :
     match va with
     | .one =>
       return ⟨_, vb, q(one_mul _)⟩
-    | .mul vx vn vc =>
-      let ⟨_, vd, _⟩ ← evalMul vc vb
-      let ⟨_, ve, _⟩ ← evalExBaseMul vx vn vd
-      return ⟨_, ve, q(sorry)⟩
+    | .mul (x := x) (e := n) vx vn (b := c) vc =>
+      let ⟨_, vd, pd⟩ ← evalMul vc vb
+      let ⟨_, ve, pe⟩ ← evalExBaseMul vx vn vd
+      return ⟨_, ve, q(mul_cons_congr $x $n $pd $pe)⟩
+
+theorem inv_zpow_mul_one (x : G) (n n' : ℤ) (h : -n = n') :
+    (x ^ n * (1 : G))⁻¹ = x ^ n' * 1 := by
+  rw [mul_one, ← zpow_neg, h, mul_one]
+
+theorem inv_mul_eq_one_zpow (x b : G) (n n' : ℤ) (hb : b⁻¹ = 1) (hn : -n = n') :
+    (x ^ n * b)⁻¹ = x ^ n' * 1 := by
+  rw [inv_eq_one.mp hb, inv_zpow_mul_one x n n' hn]
+
+theorem inv_mul_mul (x : G) (n : ℤ) (b y : G) (m : ℤ) (d f e : G)
+    (hb : b⁻¹ = y ^ m * d) (hf : (x ^ n * (1 : G))⁻¹ = f) (he : d * f = e) :
+    (x ^ n * b)⁻¹ = y ^ m * e := by
+  rw [mul_inv_rev, ← mul_one (x ^ n), hf, hb, mul_assoc, he]
 
 /--
 1⁻¹ = 1
@@ -184,21 +208,30 @@ partial def evalInv {a : Q($α)} (va : ExProd gα a) :
     | .one =>
       return ⟨_ , .one, q(inv_one)⟩
     -- `(x ^ n * 1)⁻¹ = x ^ (-n) * 1`
-    | .mul vx vn .one =>
-      let ⟨_, vneg, _⟩ ← evalNeg rcℤ rℤ vn
-      return ⟨_, .mul vx vneg .one, q(sorry)⟩
+    | .mul (x := x) (e := n) vx vn .one =>
+      let ⟨n', vneg, pneg⟩ ← evalNeg rcℤ rℤ vn
+      return ⟨_, .mul vx vneg .one, q(inv_zpow_mul_one $x $n $n' $pneg)⟩
     -- `(x ^ n * b)⁻¹ = b⁻¹ * (x ^ (-n) * 1)`
-    | .mul vx vn vb =>
-      let ⟨_, vc, _⟩ ← evalInv vb
+    | .mul (x := x) (e := n) vx vn (b := b) vb =>
+      let ⟨c, vc, pc⟩ ← evalInv vb
       match vc with
       | .one =>
-        let ⟨_, vneg, _⟩ ← evalNeg rcℤ rℤ vn
-        return ⟨_, .mul vx vneg .one, q(sorry)⟩
-      | .mul vy vm vd =>
-        let ⟨_, vf, _⟩ ← evalInv (.mul vx vn .one)
-        let ⟨_, ve, _⟩ ← evalMul vd vf
-        return ⟨_, .mul vy vm ve, q(sorry)⟩
+        let ⟨n', vneg, pneg⟩ ← evalNeg rcℤ rℤ vn
+        return ⟨_, .mul vx vneg .one, q(inv_mul_eq_one_zpow $x $b $n $n' $pc $pneg)⟩
+      | .mul (x := y) (e := m) vy vm (b := d) vd =>
+        let ⟨f, vf, pf⟩ ← evalInv (.mul vx vn .one)
+        let ⟨e, ve, pe⟩ ← evalMul vd vf
+        return ⟨_, .mul vy vm ve, q(inv_mul_mul $x $n $b $y $m $d $f $e $pc $pf $pe)⟩
 
+theorem zpow_neg_of (a b c : G) (n m : ℤ) (hn : -n = m) (hb : a⁻¹ = b) (hc : b ^ m = c) :
+    a ^ n = c := by
+  rw [← neg_neg n, show -n = m from hn, ← inv_zpow', hb, hc]
+
+theorem zpow_zpow_mul_one (x : G) (k n kn : ℤ) (h : k * n = kn) :
+    (x ^ k * (1 : G)) ^ n = x ^ kn * 1 := by
+  simp [← zpow_mul, h]
+
+mutual
 
 /--
 ( · )^0 = 1
@@ -226,16 +259,16 @@ partial def evalPow {a : Q($α)} {n : Q(ℤ)} (va : ExProd gα a) (vn : ExSum Ra
         | .zero => false
       if leadingNeg then
         withTraceNode `Tactic.group (fun _ => return m!"neg exponent") do
-          let ⟨_, vm, _⟩ ← evalNeg rcℤ rℤ vn
-          let ⟨_, vb, _⟩ ← evalInv va
-          let ⟨_, vc, _⟩ ← evalPow vb vm
-          return ⟨_, vc, q(sorry)⟩
+          let ⟨m, vm, pm⟩ ← evalNeg rcℤ rℤ vn
+          let ⟨b, vb, pb⟩ ← evalInv va
+          let ⟨c, vc, pc⟩ ← evalPow vb vm
+          return ⟨_, vc, q(zpow_neg_of $a $b $c $n $m $pm $pb $pc)⟩
       else
         match va with
         -- `(x ^ k) ^ n = x ^ (k * n)`
-        | .mul vx vk .one =>
-          let ⟨_, vkn, pkn⟩ ← Mathlib.Tactic.Ring.Common.evalMul rcℤ rcℕ vk vn
-          return ⟨_, .mul vx vkn .one, q(sorry)⟩
+        | .mul (x := x) vx (e := k) vk .one =>
+          let ⟨kn, vkn, pkn⟩ ← Mathlib.Tactic.Ring.Common.evalMul rcℤ rcℕ vk vn
+          return ⟨_, .mul vx vkn .one, q(zpow_zpow_mul_one $x $k $n $kn $pkn)⟩
         -- `(b * a * c) ^ n`
         | va => evalPowCycle va n
 
@@ -246,6 +279,35 @@ partial def evalPowCycle {a : Q($α)} (va : ExProd gα a) (n : Q(ℤ)) :
 
 end
 
+theorem npow_eq (a a' c : G) (n : ℕ) (n' : ℤ)
+    (ha : a = a') (hn : (n : ℤ) = n') (hc : a' ^ n' = c) : a ^ n = c := by
+  rw [← zpow_natCast, ha, hn, hc]
+
+/-- A proof of `(e : ℤ)` equal to the integer reading of a `ℕ` exponent expression,
+interpreting nat subtraction as integer subtraction when both sides are definitionally
+equal (e.g. `n - n`). -/
+partial def natExpToInt_eq (e : Q(ℕ)) : MetaM ((eℤ : Q(ℤ)) × Q(($e : ℤ) = $eℤ)) := do
+  match e with
+  | ~q($a + $b) =>
+    let ⟨aℤ, pa⟩ ← natExpToInt_eq a; let ⟨bℤ, pb⟩ ← natExpToInt_eq b
+    pure ⟨q($aℤ + $bℤ), q(by rw [Int.natCast_add, «$pa», «$pb»])⟩
+  | ~q($a * $b) =>
+    let ⟨aℤ, pa⟩ ← natExpToInt_eq a; let ⟨bℤ, pb⟩ ← natExpToInt_eq b
+    pure ⟨q($aℤ * $bℤ), q(by rw [Int.natCast_mul, «$pa», «$pb»])⟩
+  | ~q($a - $b) =>
+    let ⟨aℤ, pa⟩ ← natExpToInt_eq a
+    if a.equal b then
+      have : $a =Q $b := ⟨⟩
+      -- Use `aℤ - aℤ` so both sides rewrite with the same proof `pa`.
+      pure ⟨q($aℤ - $aℤ),
+        q(by rw [Int.natCast_sub (Nat.le_refl _), «$pa»])⟩
+    else
+      -- Fall back to the (possibly truncated) nat cast; ring may still simplify.
+      pure ⟨q(($e : ℤ)), q(rfl)⟩
+  | ~q($a ^ $b) =>
+    let ⟨aℤ, pa⟩ ← natExpToInt_eq a
+    pure ⟨q($aℤ ^ $b), q(by rw [Int.natCast_pow, «$pa»])⟩
+  | _ => pure ⟨q(($e : ℤ)), q(rfl)⟩
 
 partial def eval (e : Q($α)) : AtomM (Result (ExProd gα) e) := Lean.withIncRecDepth do
   withTraceNode `Tactic.group (fun _ => return m!"eval: {e}") do
@@ -273,11 +335,11 @@ partial def eval (e : Q($α)) : AtomM (Result (ExProd gα) e) := Lean.withIncRec
             pure ⟨_, vc, q(by rw [← «$pc», ← «$pn», ← «$pa»])⟩
         | ~q($a ^ ($n : ℕ)) =>
           withTraceNode `Tactic.group (fun _ => return m!"pow ℕ") do
-            let ⟨_, va, pa⟩ ← eval a
-            let nℤ ← natExpToInt n
-            let ⟨_, vn, pn⟩ ← Mathlib.Tactic.Ring.Common.eval rcℕ rcℤ cℤ nℤ
-            let ⟨_, vc, pc⟩ ← evalPow va vn
-            pure ⟨_, vc, q(sorry)⟩
+            let ⟨a', va, pa⟩ ← eval a
+            let ⟨nℤ, pnat⟩ ← natExpToInt_eq n
+            let ⟨n', vn, pn⟩ ← Mathlib.Tactic.Ring.Common.eval rcℕ rcℤ cℤ nℤ
+            let ⟨c, vc, pc⟩ ← evalPow va vn
+            pure ⟨_, vc, q(npow_eq $a $a' $c $n $n' $pa (Eq.trans «$pnat» «$pn») $pc)⟩
         | _ => els
       | ``Inv.inv => match e with
         | ~q($a⁻¹) =>
@@ -306,7 +368,7 @@ def proveEq (g : MVarId) : AtomM Unit := do
 where
   /-- The core of `proveEq` takes expressions `e₁ e₂ : α` where `α` is a `Group`,
   and returns a proof that they are equal (or fails). -/
-  groupCore {v : Level} {α : Q(Type v)} (gα : Q(CommSemiring $α))
+  groupCore {v : Level} {α : Q(Type v)} (gα : Q(Group $α))
       (e₁ e₂ : Q($α)) : AtomM Q($e₁ = $e₂) := do
     profileitM Exception "group" (← getOptions) do
       withTraceNode `Tactic.group (fun _ => return m!"group: {e₁} =?= {e₂}") do
@@ -322,7 +384,7 @@ where
           let g ← mkFreshExprMVar q($a = $b)
           throwError "group failed, group expressions not equal\n{g.mvarId!}"
         have : $a =Q $b := ⟨⟩
-        return q(sorry)
+        return q(Eq.trans «$pa» (Eq.symm «$pb»))
 
 end
 /--
