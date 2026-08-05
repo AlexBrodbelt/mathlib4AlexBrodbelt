@@ -22,7 +22,7 @@ namespace Mathlib.Tactic.Group
 
 open Lean Meta Mathlib Tactic AtomM Qq Elab.Tactic
 open Mathlib.Tactic.Ring (RatCoeff ringCompute rcℕ ringCompare)
-open Mathlib.Tactic.Ring.Common (ExSum Cache evalAdd evalNeg)
+open Mathlib.Tactic.Ring.Common (ExSum Cache Result evalAdd evalNeg)
 
 meta section
 
@@ -58,24 +58,6 @@ inductive ExProd {u : Lean.Level} {α : Q(Type u)}
 end
 
 variable {u : Lean.Level} {α : Q(Type u)} {gα : Q(Group $α)}
-
-
-/--
-The result of evaluating an (unnormalized) expression `e` into the type family `E`
-(typically one of `ExProd` or `ExBase`) is a (normalized) element `expr`
-and a representation `E e'` for it, and a proof of `e = expr`.
--/
-structure Result {α : Q(Type u)} (E : Q($α) → Type*) (e : Q($α)) where
-  /-- The normalized result. -/
-  expr : Q($α)
-  /-- The data associated to the normalization. -/
-  val : E expr
-  /-- A proof that the original expression is equal to the normalized result. -/
-  proof : Q($e = $expr)
-
-instance {α : Q(Type u)} {E : Q($α) → Type} {e : Q($α)} [Inhabited (Σ e, E e)] :
-    Inhabited (Result E e) :=
-  let ⟨e', v⟩ : Σ e, E e := default; ⟨e', v, default⟩
 
 initialize registerTraceClass `Tactic.group
 
@@ -276,9 +258,13 @@ theorem npow_eq (a a' c : G) (n : ℕ) (n' : ℤ)
     (ha : a = a') (hn : (n : ℤ) = n') (hc : a' ^ n' = c) : a ^ n = c := by
   rw [← zpow_natCast, ha, hn, hc]
 
-/-- A proof of `(e : ℤ)` equal to the integer reading of a `ℕ` exponent expression,
-interpreting nat subtraction as integer subtraction when both sides are definitionally
-equal (e.g. `n - n`). -/
+/-- Interpret a `ℕ` exponent as a `ℤ` expression by turning Nat operations into the corresponding
+Int operations (`+`, `*`, `^`). Used when evaluating Nat powers so the exponent `ExSum` involves
+integers.
+
+Subtraction is only rewritten when both sides are definitionally equal (e.g. `n - n`); otherwise
+we keep the Nat cast `↑(a - b)`. Truncated Nat subtraction with a side condition `b ≤ a` is out of
+scope for `group` — use an integer exponent `(… : ℤ)` instead. -/
 partial def natExpToInt_eq (e : Q(ℕ)) : MetaM ((eℤ : Q(ℤ)) × Q(($e : ℤ) = $eℤ)) := do
   match e with
   | ~q($a + $b) =>
@@ -291,11 +277,9 @@ partial def natExpToInt_eq (e : Q(ℕ)) : MetaM ((eℤ : Q(ℤ)) × Q(($e : ℤ)
     let ⟨aℤ, pa⟩ ← natExpToInt_eq a
     if a.equal b then
       have : $a =Q $b := ⟨⟩
-      -- Use `aℤ - aℤ` so both sides rewrite with the same proof `pa`.
       pure ⟨q($aℤ - $aℤ),
         q(by rw [Int.natCast_sub (Nat.le_refl _), «$pa»])⟩
     else
-      -- Fall back to the (possibly truncated) nat cast; ring may still simplify.
       pure ⟨q(($e : ℤ)), q(rfl)⟩
   | ~q($a ^ $b) =>
     let ⟨aℤ, pa⟩ ← natExpToInt_eq a
@@ -418,6 +402,12 @@ example {G : Type*} [Group G] (n m : ℕ) (a : G) : a^n*a^m = a^(n+m) := by grou
 example {G : Type*} [Group G] (a _b _c : G) : a ^ (-2 : ℤ) * a = a⁻¹ := by group
 
 example {G : Type*} [Group G] (n : ℕ) (a : G) : a^(n-n) = 1 := by group
+
+example {G : Type*} [Group G] (n m : ℕ) (a : G) :
+    a ^ n * a ^ (-m : ℤ) = a ^ (n - m : ℤ) := by group
+
+example {G : Type*} [Group G] (n m : ℕ) (a : G) :
+    a ^ n * a ^ (-m : ℤ) * a ^ n = a ^ (2 * n - m : ℤ) := by group
 
 
 
