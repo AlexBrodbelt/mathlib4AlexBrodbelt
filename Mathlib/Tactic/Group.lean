@@ -6,8 +6,8 @@ public import Mathlib.Tactic.FailIfNoProgress
 public import Mathlib.Tactic.Ring
 public import Mathlib.Tactic.NormNum.Inv
 public import Mathlib.Tactic.NormNum.Pow
-import Mathlib.Tactic.Ring.Common
-import Mathlib.Util.Qq
+public import Mathlib.Tactic.Ring.Common
+public import Mathlib.Util.Qq
 
 /-!
 # `group`
@@ -16,25 +16,29 @@ import Mathlib.Util.Qq
 which are equalities between such expressions.
 -/
 
+public section
+
+namespace Mathlib.Tactic.Group
+
 open Lean Meta Mathlib Tactic AtomM Qq Elab.Tactic
 open Mathlib.Tactic.Ring (RatCoeff ringCompute rcℕ ringCompare)
 open Mathlib.Tactic.Ring.Common (ExSum Cache evalAdd evalNeg)
 
-section Group
+meta section
 
 /-- `CommSemiring ℤ` / cache / coefficient normalizer for exponents (cf. `sℕ`, `Cache.nat`, `rcℕ`).
 -/
-meta def sℤ : Q(CommSemiring ℤ) := q(Int.instCommSemiring)
-meta def cℤ : Cache sℤ :=
+def sℤ : Q(CommSemiring ℤ) := q(Int.instCommSemiring)
+def cℤ : Cache sℤ :=
   { rα := some q(Int.instCommRing), dsα := none, czα := some q(Int.instCharZero) }
-meta def rcℤ := ringCompute cℤ
+def rcℤ := ringCompute cℤ
 /-- `CommRing ℤ` from `cℤ` (always present). -/
-meta def rℤ : Q(CommRing ℤ) := cℤ.rα.get!
+def rℤ : Q(CommRing ℤ) := cℤ.rα.get!
 
 mutual
 
 /-- `ExBase gα e` is a normalized base of a power `e ^ n` in a group. -/
-meta inductive ExBase {u : Lean.Level} {α : Q(Type u)}
+inductive ExBase {u : Lean.Level} {α : Q(Type u)}
     (gα : Q(Group $α)) : (e : Q($α)) → Type
   /-- An atomic expression with atom id `id`. -/
   | atom {e} (id : ℕ) : ExBase gα e
@@ -42,7 +46,7 @@ meta inductive ExBase {u : Lean.Level} {α : Q(Type u)}
   | prod {e} (va : ExProd gα e) : ExBase gα e
 
 /-- `ExProd gα e` is a normalized product of powers in a group. -/
-meta inductive ExProd {u : Lean.Level} {α : Q(Type u)}
+inductive ExProd {u : Lean.Level} {α : Q(Type u)}
     (gα : Q(Group $α)) : (e : Q($α)) → Type
   /-- The identity. -/
   | one : ExProd gα q(1)
@@ -72,10 +76,6 @@ structure Result {α : Q(Type u)} (E : Q($α) → Type*) (e : Q($α)) where
 instance {α : Q(Type u)} {E : Q($α) → Type} {e : Q($α)} [Inhabited (Σ e, E e)] :
     Inhabited (Result E e) :=
   let ⟨e', v⟩ : Σ e, E e := default; ⟨e', v, default⟩
-
-
-
-meta section
 
 initialize registerTraceClass `Tactic.group
 
@@ -107,7 +107,6 @@ partial def ExProd.cmp {a b : Q($α)} :
 
 end
 
-/-! ### Multiplication of an `ExBase` power into an `ExProd` -/
 variable {G : Type*} [Group G]
 
 theorem zpow_zero_mul_one (a : G) : a ^ (0 : ℤ) * (1 : G) = 1 := by simp
@@ -155,8 +154,6 @@ partial def evalExBaseMul {a b : Q($α)} (va : ExBase gα a) {n : Q(ℤ)}
         let ⟨_, vf, _⟩ ← evalExBaseMul vx vm vd
         return ⟨_, .mul (.prod ve) vn vf, q(sorry)⟩
         -/
-
-/-! ### Multiplication of `ExProd`s -/
 
 theorem mul_cons_congr (x : G) (n : ℤ) {c b d e : G} (h₁ : c * b = d) (h₂ : x ^ n * d = e) :
     (x ^ n * c) * b = e := by
@@ -231,7 +228,10 @@ theorem zpow_zpow_mul_one (x : G) (k n kn : ℤ) (h : k * n = kn) :
     (x ^ k * (1 : G)) ^ n = x ^ kn * 1 := by
   simp [← zpow_mul, h]
 
-mutual
+partial def evalPowCycle {a : Q($α)} (va : ExProd gα a) (n : Q(ℤ)) :
+    AtomM (Result (ExProd gα) q($a ^ $n)) :=
+  withTraceNode `Tactic.group (fun _ => return m!"evalPowCycle: {a} ^ {n}") do
+    return ⟨_, va, q(sorry)⟩
 
 /--
 ( · )^0 = 1
@@ -271,13 +271,6 @@ partial def evalPow {a : Q($α)} {n : Q(ℤ)} (va : ExProd gα a) (vn : ExSum Ra
           return ⟨_, .mul vx vkn .one, q(zpow_zpow_mul_one $x $k $n $kn $pkn)⟩
         -- `(b * a * c) ^ n`
         | va => evalPowCycle va n
-
-partial def evalPowCycle {a : Q($α)} (va : ExProd gα a) (n : Q(ℤ)) :
-    AtomM (Result (ExProd gα) q($a ^ $n)) :=
-  withTraceNode `Tactic.group (fun _ => return m!"evalPowCycle: {a} ^ {n}") do
-    return ⟨_, va, q(sorry)⟩
-
-end
 
 theorem npow_eq (a a' c : G) (n : ℕ) (n' : ℤ)
     (ha : a = a') (hn : (n : ℤ) = n') (hc : a' ^ n' = c) : a ^ n = c := by
@@ -386,7 +379,6 @@ where
         have : $a =Q $b := ⟨⟩
         return q(Eq.trans «$pa» (Eq.symm «$pb»))
 
-end
 /--
 `group` solves the goal when it is an equality in a *group*,
 allowing variables in the exponent.
@@ -401,8 +393,6 @@ elab (name := group) "group" tk:"!"? : tactic => liftMetaMAtMain fun g ↦ do
 
 @[tactic_alt group] macro "group!" : tactic => `(tactic| group !)
 
-
-end Group
 
 example {G : Type*} [Group G] (a _b _c : G) : a = a := by group
 
@@ -447,7 +437,7 @@ example {G : Type*} [Group G] (n : ℕ) (a : G) : a^(n-n) = 1 := by group
 
 section Test
 
-open Lean Qq in
+open Lean Qq Mathlib.Tactic.Group in
 /-- info: false -/
 #guard_msgs in
 #eval show MetaM Bool from do
@@ -470,3 +460,7 @@ open Lean Qq in
   return atomsOk
 
 end Test
+
+end
+
+end Mathlib.Tactic.Group

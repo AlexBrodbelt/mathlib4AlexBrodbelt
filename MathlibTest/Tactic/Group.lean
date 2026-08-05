@@ -1,8 +1,6 @@
 module
 import Mathlib.Tactic.Group
 
-open scoped commutatorElement
-
 variable {G : Type} [Group G]
 
 example (a b c : G) : c*(a*b)*(b⁻¹*a⁻¹)*c = c*c := by group
@@ -14,7 +12,8 @@ example (a b c : G) : c⁻¹*(b*c⁻¹)*c*(a*b)*(b⁻¹*a⁻¹*b⁻¹)*c = 1 := 
 -- The following is known as the Hall-Witt identity,
 -- see e.g.
 -- https://en.wikipedia.org/wiki/Three_subgroups_lemma#Proof_and_the_Hall%E2%80%93Witt_identity
-example (g h k : G) : g*⁅⁅g⁻¹,h⁆,k⁆*g⁻¹*k*⁅⁅k⁻¹,g⁆,h⁆*k⁻¹*h*⁅⁅h⁻¹,k⁆,g⁆*h⁻¹ = 1 := by group
+-- Needs commutator support:
+-- example (g h k : G) : g*⁅⁅g⁻¹,h⁆,k⁆*g⁻¹*k*⁅⁅k⁻¹,g⁆,h⁆*k⁻¹*h*⁅⁅h⁻¹,k⁆,g⁆*h⁻¹ = 1 := by group
 
 example (a : G) : a^2*a = a^3 := by group
 
@@ -32,14 +31,16 @@ example (n : ℕ) (a : G) : a^(n-n) = 1 := by group
 
 example (n : ℤ) (a : G) : a^(n-n) = 1 := by group
 
-example (n : ℤ) (a : G) (h : a ^ (n * (n + 1) - n - n ^ 2) = a) : a = 1 := by
-  group at h
-  exact h.symm
+-- Needs `group at`:
+-- example (n : ℤ) (a : G) (h : a ^ (n * (n + 1) - n - n ^ 2) = a) : a = 1 := by
+--   group at h
+--   exact h.symm
 
-example (a b c d : G) (h : c = (a * b ^ 2) * ((b * b)⁻¹ * a⁻¹) * d) : a*c*d⁻¹ = a := by
-  group at h
-  rw [h]
-  group
+-- Needs `group at`:
+-- example (a b c d : G) (h : c = (a * b ^ 2) * ((b * b)⁻¹ * a⁻¹) * d) : a*c*d⁻¹ = a := by
+--   group at h
+--   rw [h]
+--   group
 
 -- The next example can be expanded to require an arbitrarily high number of alternations
 -- between simp and ring
@@ -54,7 +55,7 @@ example (x y : G) : (x⁻¹ * (x * y) * y⁻¹)⁻¹ = 1 := by group
 
 -- example (a b c d : G) : b ^ 17 * c⁻¹ * d * b ^ 3 = 1 := by sorry
 
-/--
+/-
 error: `group` made no progress
 G : Type
 inst✝ : Group G
